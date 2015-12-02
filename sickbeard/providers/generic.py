@@ -21,19 +21,15 @@ import datetime
 import os
 import re
 import itertools
-from random import shuffle
 from base64 import b16encode, b32decode
 
-import requests
 from hachoir_parser import createParser
 
 import sickbeard
 from sickbeard import helpers, classes, logger, db
 from sickbeard.common import MULTI_EP_RESULT, SEASON_RESULT
-from sickbeard import tvcache
 from sickbeard.name_parser.parser import NameParser, InvalidNameException, InvalidShowException
 from sickbeard.common import Quality
-from sickbeard.common import user_agents
 from sickrage.helper.common import sanitize_filename
 from sickrage.helper.encoding import ek
 from sickrage.helper.exceptions import ex
@@ -42,40 +38,7 @@ from sickbeard import show_name_helpers
 
 
 class GenericProvider(object):
-    NZB = "nzb"
-    TORRENT = "torrent"
-
     def __init__(self, name):
-
-        # these need to be set in the subclass
-        self.providerType = None
-        self.name = name
-
-        self.urls = {}
-        self.url = ''
-
-        self.public = False
-
-        self.show = None
-
-        self.supportsBacklog = True
-        self.supportsAbsoluteNumbering = False
-        self.anime_only = False
-
-        self.search_mode = None
-        self.search_fallback = False
-
-        self.enabled = False
-        self.enable_daily = False
-        self.enable_backlog = False
-
-        self.cache = tvcache.TVCache(self)
-
-        self.session = requests.Session()
-
-        shuffle(user_agents)
-        self.headers = {'User-Agent': user_agents[0]}
-
         self.btCacheURLS = [
             'http://torcache.net/torrent/{torrent_hash}.torrent',
             'http://thetorrent.org/torrent/{torrent_hash}.torrent',
@@ -83,60 +46,6 @@ class GenericProvider(object):
             # 'http://torrage.com/torrent/{torrent_hash}.torrent',
             # 'http://itorrents.org/torrent/{torrent_hash}.torrent',
         ]
-
-        shuffle(self.btCacheURLS)
-
-        self.proper_strings = ['PROPER|REPACK|REAL']
-
-    def getID(self):
-        return GenericProvider.makeID(self.name)
-
-    @staticmethod
-    def makeID(name):
-        return re.sub(r"[^\w\d_]", "_", name.strip().lower())
-
-    def imageName(self):
-        return self.getID() + '.png'
-
-    # pylint: disable=R0201,W0612
-    # Method could be a function, Unused variable
-    def _checkAuth(self):
-        return True
-
-    def _doLogin(self):
-        return True
-
-    def isActive(self):
-        return False
-
-    def isEnabled(self):
-        return self.enabled
-
-    def getResult(self, episodes):
-        """
-        Returns a result of the correct type for this provider
-        """
-
-        if self.providerType == GenericProvider.NZB:
-            result = classes.NZBSearchResult(episodes)
-        elif self.providerType == GenericProvider.TORRENT:
-            result = classes.TorrentSearchResult(episodes)
-        else:
-            result = classes.SearchResult(episodes)
-
-        result.provider = self
-
-        return result
-
-    def getURL(self, url, post_data=None, params=None, timeout=30, json=False, needBytes=False):
-        """
-        By default this is just a simple urlopen call but this method should be overridden
-        for providers with special URL requirements (like cookies)
-        """
-
-        return helpers.getURL(url, post_data=post_data, params=params, headers=self.headers, timeout=timeout,
-                              session=self.session, json=json, needBytes=needBytes)
-
 
     def _makeURL(self, result):
         urls = []
@@ -236,32 +145,6 @@ class GenericProvider(object):
 
         return True
 
-    def searchRSS(self, episodes):
-        return self.cache.findNeededEpisodes(episodes)
-
-    def getQuality(self, item, anime=False):
-        """
-        Figures out the quality of the given RSS item node
-
-        item: An elementtree.ElementTree element representing the <item> tag of the RSS feed
-
-        Returns a Quality value obtained from the node's data
-        """
-        (title, url) = self._get_title_and_url(item)
-        quality = Quality.sceneQuality(title, anime)
-        return quality
-
-    # pylint: disable=R0201,W0613
-    # Method could be a function, Unused argument
-    def _doSearch(self, search_params, search_mode='eponly', epcount=0, age=0, epObj=None):
-        return []
-
-    def _get_season_search_strings(self, episode):
-        return []
-
-    def _get_episode_search_strings(self, eb_obj, add_string=''):
-        return []
-
     def _get_title_and_url(self, item):
         """
         Retrieves the title and URL data from the item XML node
@@ -280,11 +163,6 @@ class GenericProvider(object):
             url = url.replace('&amp;', '&').replace('%26tr%3D', '&tr=')
 
         return title, url
-
-    def _get_size(self, item):
-        """Gets the size from the item"""
-        logger.log(u"Provider type doesn't have _get_size() implemented yet", logger.ERROR)
-        return -1
 
     def findSearchResults(self, show, episodes, search_mode, manualSearch=False, downCurQuality=False):
 
@@ -511,51 +389,8 @@ class GenericProvider(object):
 
         return results
 
-    def findPropers(self, search_date=None):
-
-        results = self.cache.listPropers(search_date)
-
-        return [classes.Proper(x['name'], x['url'], datetime.datetime.fromtimestamp(x['time']), self.show) for x in
-                results]
-
-    def seedRatio(self):
-        '''
-        Provider should override this value if custom seed ratio enabled
-        It should return the value of the provider seed ratio
-        '''
-        return ''
-
-
-class NZBProvider(GenericProvider):
-    def __init__(self, name):
-        GenericProvider.__init__(self, name)
-
-        self.providerType = GenericProvider.NZB
-
-    def isActive(self):
-        return sickbeard.USE_NZBS and self.isEnabled()
-
-    def _get_size(self, item):
-        try:
-            size = item.get('links')[1].get('length', -1)
-        except IndexError:
-            size = -1
-
-        if not size:
-            logger.log(u"Size was not found in your provider response", logger.DEBUG)
-
-        return int(size)
-
 
 class TorrentProvider(GenericProvider):
-    def __init__(self, name):
-        GenericProvider.__init__(self, name)
-
-        self.providerType = GenericProvider.TORRENT
-
-    def isActive(self):
-        return sickbeard.USE_TORRENTS and self.isEnabled()
-
     def _get_title_and_url(self, item):
         from feedparser.util import FeedParserDict
         if isinstance(item, (dict, FeedParserDict)):
@@ -578,22 +413,7 @@ class TorrentProvider(GenericProvider):
         if download_url:
             download_url = download_url.replace('&amp;', '&')
 
-        return (title, download_url)
-
-
-    def _get_size(self, item):
-
-        size = -1
-        if isinstance(item, dict):
-            size = item.get('size', -1)
-        elif isinstance(item, (list, tuple)) and len(item) > 2:
-            size = item[2]
-
-        # Make sure we didn't select seeds/leechers by accident
-        if not size or size < 1024*1024:
-            size = -1
-
-        return size
+        return title, download_url
 
     def _get_season_search_strings(self, ep_obj):
 
@@ -634,10 +454,6 @@ class TorrentProvider(GenericProvider):
             search_string['Episode'].append(ep_string.encode('utf-8').strip())
 
         return [search_string]
-
-    @staticmethod
-    def _clean_title_from_provider(title):
-        return (title or '').replace(' ', '.')
 
     @property
     def _custom_trackers(self):
